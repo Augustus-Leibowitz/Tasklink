@@ -1,0 +1,9 @@
+node_modules/
+.dist/
+*.log
+.env
+backend/prisma/dev.db
+backend/dist/
+frontend/dist/
+.vscode/
+.DS_Store

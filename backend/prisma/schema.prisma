@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  email         String?  @unique
+  displayName   String?
+
+  canvasUserId  String?  @unique
+  todoistUserId String?  @unique
+
+  canvasAccount  CanvasAccount?
+  todoistAccount TodoistAccount?
+
+  courses        Course[]
+  syncRuns       SyncRun[]
+}
+
+model CanvasAccount {
+  id                 String   @id @default(cuid())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id])
+
+  accessToken        String
+  refreshToken       String?
+  tokenExpiresAt     DateTime?
+
+  baseUrl            String   // Canvas instance URL
+}
+
+model TodoistAccount {
+  id                 String   @id @default(cuid())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id])
+
+  accessToken        String
+}
+
+model Course {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+
+  canvasCourseId String
+  name           String
+
+  todoistProjectId String? // mapped Todoist project
+
+  assignments    Assignment[]
+
+  @@unique([userId, canvasCourseId])
+}
+
+model Assignment {
+  id               String   @id @default(cuid())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  courseId         String
+  course           Course   @relation(fields: [courseId], references: [id])
+
+  canvasAssignmentId String
+  name               String
+  description        String?
+
+  dueDate          DateTime? // date-only semantics at app level
+
+  todoistTaskId    String?   // created Todoist task, if any
+  lastSyncedAt     DateTime?
+
+  @@unique([courseId, canvasAssignmentId])
+}
+
+model SyncRun {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+  status        String   // e.g. SUCCESS, PARTIAL, ERROR
+  message       String?
+}
