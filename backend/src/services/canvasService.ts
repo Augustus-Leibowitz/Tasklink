@@ -11,6 +11,13 @@ export interface FetchAssignmentsResult {
   assignmentsUpserted: number;
 }
 
+export interface FetchAssignmentsOptions {
+  // How many days ahead from today to include. If null/undefined, include all future dates.
+  daysAhead?: number | null;
+  // Whether to include assignments that have no due date at all.
+  includeNoDueDate?: boolean;
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, '');
 }
@@ -75,7 +82,11 @@ function normalizeDueDate(dueAt: string | null | undefined): Date | null {
   return date;
 }
 
-export async function fetchAndStoreUpcomingAssignments(): Promise<FetchAssignmentsResult> {
+export async function fetchAndStoreUpcomingAssignments(
+  options: FetchAssignmentsOptions = {},
+): Promise<FetchAssignmentsResult> {
+  const { daysAhead, includeNoDueDate = true } = options;
+
   const user = await prisma.user.findFirst({
     include: { canvasAccount: true },
   });
@@ -105,10 +116,12 @@ export async function fetchAndStoreUpcomingAssignments(): Promise<FetchAssignmen
   let coursesProcessed = 0;
   let assignmentsUpserted = 0;
 
-  // We want all future assignments, not just Canvas's short "upcoming" window.
-  // Compute "today" at local midnight so we can skip already-past-due work.
+  // We want all future assignments (subject to optional look-ahead), not just Canvas's short
+  // "upcoming" window. Compute "today" at local midnight so we can skip already-past-due work
+  // and optionally cap how far ahead we look.
   const now = new Date();
   const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const maxDaysAhead = typeof daysAhead === 'number' && daysAhead > 0 ? daysAhead : null;
 
   for (const course of courses) {
     if (!course.id || !course.name) continue;
@@ -150,9 +163,23 @@ export async function fetchAndStoreUpcomingAssignments(): Promise<FetchAssignmen
 
       const dueDate = normalizeDueDate(assignment.due_at);
 
+      // Optionally skip assignments with no due date at all.
+      if (!dueDate && !includeNoDueDate) {
+        continue;
+      }
+
       // Skip assignments that are clearly in the past; we only care about today and future.
       if (dueDate && dueDate < todayMidnight) {
         continue;
+      }
+
+      // If a look-ahead window is configured, skip assignments beyond that window.
+      if (dueDate && maxDaysAhead !== null) {
+        const diffMs = dueDate.getTime() - todayMidnight.getTime();
+        const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+        if (diffDays > maxDaysAhead) {
+          continue;
+        }
       }
 
       await prisma.assignment.upsert({

@@ -48,6 +48,13 @@ type PrioritySettings = {
   p3: PriorityRangeConfig;
   p4: PriorityRangeConfig;
 };
+
+type DetectionSettings = {
+  // null = all future assignments
+  daysAhead: number | null;
+  // whether to include assignments that have no due date
+  includeNoDueDate: boolean;
+};
 type BackendStatus = {
   canvasConfigured: boolean;
   canvasBaseUrl: string | null;
@@ -99,6 +106,11 @@ export const App: React.FC = () => {
     p2: { enabled: true, to: 3, todoistPriority: 3 }, // Todoist P2
     p3: { enabled: true, to: 4, todoistPriority: 2 }, // Todoist P3
     p4: { enabled: false, to: 5, todoistPriority: 1 }, // Todoist P4, off by default
+  });
+
+  const [detectionSettings, setDetectionSettings] = useState<DetectionSettings>({
+    daysAhead: null, // all future
+    includeNoDueDate: true,
   });
 
   const [syncSelectedCourseIds, setSyncSelectedCourseIds] = useState<string[]>([]);
@@ -205,6 +217,21 @@ export const App: React.FC = () => {
           // New shape
           setPrioritySettings((prev) => normalizePrioritySettingsFromStorage(parsed as Partial<PrioritySettings>, prev));
         }
+      } catch {
+        // ignore bad data
+      }
+    }
+
+    const storedDetection = window.localStorage.getItem('tasklink-detection-settings');
+    if (storedDetection) {
+      try {
+        const parsed = JSON.parse(storedDetection) as any;
+        setDetectionSettings({
+          daysAhead:
+            typeof parsed.daysAhead === 'number' && parsed.daysAhead > 0 ? parsed.daysAhead : null,
+          includeNoDueDate:
+            typeof parsed.includeNoDueDate === 'boolean' ? parsed.includeNoDueDate : true,
+        });
       } catch {
         // ignore bad data
       }
@@ -382,6 +409,13 @@ export const App: React.FC = () => {
 
       const res = await fetch(`${API_BASE_URL}/api/canvas/fetch-assignments`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          daysAhead: detectionSettings.daysAhead,
+          includeNoDueDate: detectionSettings.includeNoDueDate,
+        }),
       });
 
       if (!res.ok) {
@@ -590,8 +624,55 @@ export const App: React.FC = () => {
     }
   };
 
+  // Mirror backend logic: compute a conceptual bucket (p1–p4), then adjust for disabled buckets
+  // so the label matches the actual priority that will be used during sync.
   const formatPriorityLabel = (a: UiAssignment): { label: string; className: string } => {
-    if (!a.dueDate) return { label: 'P4', className: 'priority-p3' };
+    const buckets: PriorityKey[] = ['p1', 'p2', 'p3', 'p4'];
+
+    const clampAndBucket = (diffDays: number): PriorityKey => {
+      if (diffDays <= 0) return 'p1';
+      const day: DayOption = clampDay(diffDays > 5 ? 5 : diffDays);
+      const cuts = {
+        p1: prioritySettings.p1.to,
+        p2: prioritySettings.p2.to,
+        p3: prioritySettings.p3.to,
+      };
+      if (day <= cuts.p1) return 'p1';
+      if (day <= cuts.p2) return 'p2';
+      if (day <= cuts.p3) return 'p3';
+      return 'p4';
+    };
+
+    const adjustForEnabled = (bucket: PriorityKey): PriorityKey => {
+      const idx = buckets.indexOf(bucket);
+      // Search upward in urgency (toward p1), then downward.
+      for (let i = idx; i >= 0; i -= 1) {
+        const key = buckets[i];
+        if (prioritySettings[key].enabled) return key;
+      }
+      for (let i = idx + 1; i < buckets.length; i += 1) {
+        const key = buckets[i];
+        if (prioritySettings[key].enabled) return key;
+      }
+      return bucket;
+    };
+
+    // No due date: treat as conceptual P4, then adjust based on enabled flags.
+    if (!a.dueDate) {
+      const effective = adjustForEnabled('p4');
+      switch (effective) {
+        case 'p1':
+          return { label: 'P1', className: 'priority-p1' };
+        case 'p2':
+          return { label: 'P2', className: 'priority-p2' };
+        case 'p3':
+          return { label: 'P3', className: 'priority-p3' };
+        case 'p4':
+        default:
+          return { label: 'P4', className: 'priority-p3' };
+      }
+    }
+
     const today = new Date();
     const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const due = new Date(a.dueDate);
@@ -599,22 +680,10 @@ export const App: React.FC = () => {
     const diffMs = dueMidnight.getTime() - todayMidnight.getTime();
     const rawDiffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-    // Overdue/today always P1
-    if (rawDiffDays <= 0) return { label: 'P1', className: 'priority-p1' };
+    const conceptual = clampAndBucket(rawDiffDays);
+    const effective = adjustForEnabled(conceptual);
 
-    const day: DayOption = clampDay(rawDiffDays > 5 ? 5 : rawDiffDays);
-    const cuts = {
-      p1: prioritySettings.p1.to,
-      p2: prioritySettings.p2.to,
-      p3: prioritySettings.p3.to,
-    };
-
-    let bucket: PriorityKey = 'p4';
-    if (day <= cuts.p1) bucket = 'p1';
-    else if (day <= cuts.p2) bucket = 'p2';
-    else if (day <= cuts.p3) bucket = 'p3';
-
-    switch (bucket) {
+    switch (effective) {
       case 'p1':
         return { label: 'P1', className: 'priority-p1' };
       case 'p2':
@@ -663,6 +732,13 @@ export const App: React.FC = () => {
     setPrioritySettings(normalized);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('tasklink-priority-settings', JSON.stringify(normalized));
+    }
+  };
+
+  const persistDetectionSettings = (next: DetectionSettings) => {
+    setDetectionSettings(next);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('tasklink-detection-settings', JSON.stringify(next));
     }
   };
 
@@ -869,6 +945,53 @@ export const App: React.FC = () => {
                 Auto-sync uses all courses that have a linked Todoist project. You can still run manual syncs at any
                 time.
               </p>
+            </section>
+
+            <section className="card">
+              <div className="card-header">
+                <div className="card-title">Assignments detection</div>
+              </div>
+              <div className="card-description">
+                Control how far ahead Tasklink looks in Canvas and whether to include assignments with no due date.
+              </div>
+              <div className="field-group">
+                <label className="field-label">Look ahead</label>
+                <select
+                  className="select"
+                  value={detectionSettings.daysAhead === null ? 'all' : String(detectionSettings.daysAhead)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    const next: DetectionSettings = {
+                      ...detectionSettings,
+                      daysAhead: value === 'all' ? null : Number(value),
+                    };
+                    persistDetectionSettings(next);
+                  }}
+                >
+                  <option value="30">30 days</option>
+                  <option value="90">90 days</option>
+                  <option value="180">180 days</option>
+                  <option value="365">365 days</option>
+                  <option value="all">All future</option>
+                </select>
+              </div>
+              <div className="field-group">
+                <label className="field-label">No due-date assignments</label>
+                <label style={{ fontSize: '0.85rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={detectionSettings.includeNoDueDate}
+                    onChange={(e) =>
+                      persistDetectionSettings({
+                        ...detectionSettings,
+                        includeNoDueDate: e.target.checked,
+                      })
+                    }
+                    style={{ marginRight: '0.4rem' }}
+                  />
+                  Include assignments with no due date
+                </label>
+              </div>
             </section>
 
             <section className="card">
