@@ -95,6 +95,19 @@ export async function fetchAndStoreUpcomingAssignments(
     throw new Error('Canvas configuration not found. Please save Canvas base URL and token first.');
   }
 
+  // If the user has chosen to ignore no-due-date assignments, proactively remove any existing
+  // ones from the database for this user so they disappear from the UI and future syncs.
+  if (!includeNoDueDate) {
+    await prisma.assignment.deleteMany({
+      where: {
+        dueDate: null,
+        course: {
+          userId: user.id,
+        },
+      },
+    });
+  }
+
   const { baseUrl, accessToken } = user.canvasAccount;
   const authHeaders = {
     Authorization: `Bearer ${accessToken}`,
