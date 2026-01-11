@@ -363,7 +363,11 @@ export const App: React.FC = () => {
       }
 
       const body = (await res.json()) as { assignments?: UiAssignment[] };
-      setAssignments(body.assignments ?? []);
+      let next = body.assignments ?? [];
+      if (!detectionSettings.includeNoDueDate) {
+        next = next.filter((a) => a.dueDate !== null);
+      }
+      setAssignments(next);
     } catch (err) {
       if (err instanceof Error) {
         setAssignmentsError(err.message);
