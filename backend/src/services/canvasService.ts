@@ -105,6 +105,11 @@ export async function fetchAndStoreUpcomingAssignments(): Promise<FetchAssignmen
   let coursesProcessed = 0;
   let assignmentsUpserted = 0;
 
+  // We want all future assignments, not just Canvas's short "upcoming" window.
+  // Compute "today" at local midnight so we can skip already-past-due work.
+  const now = new Date();
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
   for (const course of courses) {
     if (!course.id || !course.name) continue;
 
@@ -132,7 +137,7 @@ export async function fetchAndStoreUpcomingAssignments(): Promise<FetchAssignmen
       {
         headers: authHeaders,
         params: {
-          bucket: 'upcoming',
+          // No bucket filter: fetch all assignments for the course.
           per_page: 50,
         },
       },
@@ -144,6 +149,11 @@ export async function fetchAndStoreUpcomingAssignments(): Promise<FetchAssignmen
       if (!assignment.id || !assignment.name) continue;
 
       const dueDate = normalizeDueDate(assignment.due_at);
+
+      // Skip assignments that are clearly in the past; we only care about today and future.
+      if (dueDate && dueDate < todayMidnight) {
+        continue;
+      }
 
       await prisma.assignment.upsert({
         where: {
