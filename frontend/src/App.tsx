@@ -950,6 +950,14 @@ export const App: React.FC = () => {
     );
   };
 
+  // Derive simple onboarding checklist state for the authenticated view.
+  const canvasStepDone = !!backendStatus?.canvasConfigured;
+  const todoistStepDone = !!backendStatus?.todoistConfigured;
+  const coursesFetched = (backendStatus?.coursesCount ?? 0) > 0;
+  const hasMappedCourse = courses.some((c) => c.todoistProjectId);
+  const hasSyncHistory = syncRuns.length > 0;
+  const allStepsDone = canvasStepDone && todoistStepDone && hasMappedCourse && hasSyncHistory;
+
   // If we don't yet know auth status, show a simple loading shell.
   if (authState === 'unknown') {
     return (
@@ -1414,6 +1422,42 @@ export const App: React.FC = () => {
                   </div>
                 )}
               </div>
+            </section>
+
+            <section className="card">
+              <div className="card-header">
+                <div className="card-title">Getting started</div>
+              </div>
+              <div className="card-description">
+                Follow these steps to get Tasklink fully set up. You can always revisit them later.
+              </div>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                <li style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                  <span style={{ fontSize: '0.9rem' }}>{canvasStepDone ? '✅' : '⬜'}</span>
+                  <span>Connect Canvas (save your Canvas base URL and token).</span>
+                </li>
+                <li style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                  <span style={{ fontSize: '0.9rem' }}>{todoistStepDone ? '✅' : '⬜'}</span>
+                  <span>Connect Todoist (save your Todoist API token).</span>
+                </li>
+                <li style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                  <span style={{ fontSize: '0.9rem' }}>{coursesFetched ? '✅' : '⬜'}</span>
+                  <span>Fetch assignments from Canvas at least once.</span>
+                </li>
+                <li style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                  <span style={{ fontSize: '0.9rem' }}>{hasMappedCourse ? '✅' : '⬜'}</span>
+                  <span>Map at least one Canvas course to a Todoist project.</span>
+                </li>
+                <li style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ fontSize: '0.9rem' }}>{hasSyncHistory ? '✅' : '⬜'}</span>
+                  <span>Run your first sync to Todoist.</span>
+                </li>
+              </ul>
+              {allStepsDone && (
+                <p className="status-text" style={{ marginTop: '0.5rem' }}>
+                  All set! You can tweak priorities, auto-sync, and detection settings any time.
+                </p>
+              )}
             </section>
 
             <section className="card">
