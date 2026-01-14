@@ -1038,7 +1038,7 @@ export const App: React.FC = () => {
                 type="button"
                 className="btn btn-primary"
                 onClick={handleSubmitAuth}
-                disabled={authLoading || !authEmail || !authPassword}
+                disabled={authLoading}
               >
                 {authLoading ? (isLogin ? 'Signing in…' : 'Creating account…') : isLogin ? 'Sign in' : 'Create account'}
               </button>
