@@ -14,6 +14,10 @@ model User {
 
   email         String?  @unique
   displayName   String?
+  passwordHash  String?  // for built-in email/password auth
+
+  // OAuth identities for Tasklink login
+  googleSub     String?  @unique
 
   canvasUserId  String?  @unique
   todoistUserId String?  @unique

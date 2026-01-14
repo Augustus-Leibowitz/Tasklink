@@ -2,6 +2,7 @@ import axios from 'axios';
 import { prisma } from '../prisma';
 
 export interface UpsertCanvasConfigParams {
+  userId: string;
   baseUrl: string;
   accessToken: string;
 }
@@ -22,19 +23,8 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, '');
 }
 
-async function getOrCreateSingleUserId(): Promise<string> {
-  const existing = await prisma.user.findFirst();
-  if (existing) return existing.id;
-
-  const created = await prisma.user.create({
-    data: {},
-  });
-  return created.id;
-}
-
-export async function upsertCanvasConfig({ baseUrl, accessToken }: UpsertCanvasConfigParams) {
+export async function upsertCanvasConfig({ userId, baseUrl, accessToken }: UpsertCanvasConfigParams) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
-  const userId = await getOrCreateSingleUserId();
 
   const account = await prisma.canvasAccount.upsert({
     where: { userId },
@@ -83,11 +73,13 @@ function normalizeDueDate(dueAt: string | null | undefined): Date | null {
 }
 
 export async function fetchAndStoreUpcomingAssignments(
+  userId: string,
   options: FetchAssignmentsOptions = {},
 ): Promise<FetchAssignmentsResult> {
   const { daysAhead, includeNoDueDate = true } = options;
 
-  const user = await prisma.user.findFirst({
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
     include: { canvasAccount: true },
   });
 

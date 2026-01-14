@@ -1,9 +1,20 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import { upsertCanvasConfig, fetchAndStoreUpcomingAssignments } from './services/canvasService';
 import { upsertTodoistConfig, fetchTodoistProjects, syncAssignmentsToTodoist } from './services/todoistService';
 import { prisma } from './prisma';
+import {
+  authMiddleware,
+  clearSessionCookie,
+  getSessionFromRequest,
+  getUserEmailFromRequest,
+  getUserIdFromRequest,
+  redirectToFrontend,
+  requireAuth,
+  setSessionCookie,
+} from './auth';
 
 dotenv.config();
 
@@ -20,18 +31,20 @@ let autoSyncTimer: NodeJS.Timeout | null = null;
 
 async function runAutoSync() {
   try {
-    // Fetch latest Canvas assignments first.
-    await fetchAndStoreUpcomingAssignments();
+    if (!autoSyncUserId) return;
 
-    // Sync all courses that have a mapped Todoist project.
+    // Fetch latest Canvas assignments first, using default detection options (all future, include no-due-date).
+    await fetchAndStoreUpcomingAssignments(autoSyncUserId);
+
+    // Sync all courses that have a mapped Todoist project for this user.
     const mappedCourses = await prisma.course.findMany({
-      where: { todoistProjectId: { not: null } },
+      where: { userId: autoSyncUserId, todoistProjectId: { not: null } },
       select: { id: true },
     });
 
     if (mappedCourses.length === 0) return;
 
-    await syncAssignmentsToTodoist(mappedCourses.map((c) => c.id));
+    await syncAssignmentsToTodoist(autoSyncUserId, mappedCourses.map((c) => c.id));
   } catch (err) {
     // For now, just log; in the future we could persist these.
     // eslint-disable-next-line no-console
@@ -57,12 +70,97 @@ function configureAutoSync(intervalMinutes: number) {
 app.use(
   cors({
     origin: corsOrigins.length === 0 ? '*' : corsOrigins,
+    credentials: true,
   }),
 );
+app.use(cookieParser());
 app.use(express.json());
+app.use(authMiddleware);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Lightweight auth status endpoint used by the frontend shell.
+app.get('/api/me', (req, res) => {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    return res.json({ authenticated: false });
+  }
+  return res.json({
+    authenticated: true,
+    user: {
+      email: session.email ?? getUserEmailFromRequest(req),
+    },
+  });
+});
+
+// Register a new user with email/password and start a session.
+app.post('/auth/register', async (req, res) => {
+  const { email, password, name, remember } = req.body as {
+    email?: string;
+    password?: string;
+    name?: string;
+    remember?: boolean;
+  };
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  const normalizedEmail = email.toLowerCase();
+  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+  if (existing) {
+    return res.status(400).json({ error: 'An account with this email already exists.' });
+  }
+
+  const bcrypt = await import('bcryptjs');
+  const hash = await bcrypt.hash(password, 10);
+
+  const user = await prisma.user.create({
+    data: {
+      email: normalizedEmail,
+      passwordHash: hash,
+      displayName: name ?? null,
+    },
+  });
+
+  setSessionCookie(res, { userId: user.id, email: user.email, remember });
+  return res.json({ user: { email: user.email } });
+});
+
+// Log in with email/password and start a session.
+app.post('/auth/login', async (req, res) => {
+  const { email, password, remember } = req.body as {
+    email?: string;
+    password?: string;
+    remember?: boolean;
+  };
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+
+  const normalizedEmail = email.toLowerCase();
+  const user = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+
+  if (!user || !user.passwordHash) {
+    return res.status(400).json({ error: 'Invalid email or password.' });
+  }
+
+  const bcrypt = await import('bcryptjs');
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    return res.status(400).json({ error: 'Invalid email or password.' });
+  }
+
+  setSessionCookie(res, { userId: user.id, email: user.email, remember });
+  return res.json({ user: { email: user.email } });
+});
+
+app.post('/auth/logout', (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ success: true });
 });
 
 app.get('/api/status', async (_req, res) => {
@@ -97,15 +195,16 @@ app.get('/api/status', async (_req, res) => {
   }
 });
 
-app.post('/api/canvas/config', async (req, res) => {
+app.post('/api/canvas/config', requireAuth, async (req, res) => {
   try {
     const { baseUrl, accessToken } = req.body as { baseUrl?: string; accessToken?: string };
+    const userId = getUserIdFromRequest(req);
 
     if (!baseUrl || !accessToken) {
       return res.status(400).json({ error: 'baseUrl and accessToken are required' });
     }
 
-    const result = await upsertCanvasConfig({ baseUrl, accessToken });
+    const result = await upsertCanvasConfig({ userId, baseUrl, accessToken });
 
     return res.json({
       message: 'Canvas configuration saved',
@@ -118,9 +217,15 @@ app.post('/api/canvas/config', async (req, res) => {
   }
 });
 
-app.post('/api/canvas/fetch-assignments', async (_req, res) => {
+app.post('/api/canvas/fetch-assignments', requireAuth, async (req, res) => {
   try {
-    const result = await fetchAndStoreUpcomingAssignments();
+    const userId = getUserIdFromRequest(req);
+    const { daysAhead, includeNoDueDate } = req.body as {
+      daysAhead?: number | null;
+      includeNoDueDate?: boolean;
+    };
+
+    const result = await fetchAndStoreUpcomingAssignments(userId, { daysAhead, includeNoDueDate });
     return res.json({
       message: 'Fetched upcoming assignments from Canvas',
       ...result,
@@ -136,9 +241,15 @@ app.post('/api/canvas/fetch-assignments', async (_req, res) => {
   }
 });
 
-app.get('/api/assignments/upcoming', async (_req, res) => {
+app.get('/api/assignments/upcoming', requireAuth, async (req, res) => {
   try {
+    const userId = getUserIdFromRequest(req);
     const assignments = await prisma.assignment.findMany({
+      where: {
+        course: {
+          userId,
+        },
+      },
       include: { course: true },
       orderBy: [
         { dueDate: 'asc' },
@@ -165,9 +276,11 @@ app.get('/api/assignments/upcoming', async (_req, res) => {
   }
 });
 
-app.get('/api/courses', async (_req, res) => {
+app.get('/api/courses', requireAuth, async (req, res) => {
   try {
+    const userId = getUserIdFromRequest(req);
     const courses = await prisma.course.findMany({
+      where: { userId },
       orderBy: { name: 'asc' },
     });
 
@@ -186,7 +299,7 @@ app.get('/api/courses', async (_req, res) => {
   }
 });
 
-app.post('/api/courses/map-project', async (req, res) => {
+app.post('/api/courses/map-project', requireAuth, async (req, res) => {
   try {
     const { courseId, todoistProjectId } = req.body as {
       courseId?: string;
@@ -220,15 +333,16 @@ app.post('/api/courses/map-project', async (req, res) => {
   }
 });
 
-app.post('/api/todoist/config', async (req, res) => {
+app.post('/api/todoist/config', requireAuth, async (req, res) => {
   try {
     const { accessToken } = req.body as { accessToken?: string };
+    const userId = getUserIdFromRequest(req);
 
     if (!accessToken) {
       return res.status(400).json({ error: 'accessToken is required' });
     }
 
-    const result = await upsertTodoistConfig({ accessToken });
+    const result = await upsertTodoistConfig({ userId, accessToken });
 
     return res.json({
       message: 'Todoist configuration saved',
@@ -240,9 +354,10 @@ app.post('/api/todoist/config', async (req, res) => {
   }
 });
 
-app.get('/api/todoist/projects', async (_req, res) => {
+app.get('/api/todoist/projects', requireAuth, async (req, res) => {
   try {
-    const projects = await fetchTodoistProjects();
+    const userId = getUserIdFromRequest(req);
+    const projects = await fetchTodoistProjects(userId);
     return res.json({ projects });
   } catch (err) {
     console.error('Error fetching Todoist projects', err);
@@ -253,8 +368,9 @@ app.get('/api/todoist/projects', async (_req, res) => {
   }
 });
 
-app.post('/api/todoist/sync-assignments', async (req, res) => {
+app.post('/api/todoist/sync-assignments', requireAuth, async (req, res) => {
   try {
+    const userId = getUserIdFromRequest(req);
     const { courseIds, prioritySettings } = req.body as {
       courseIds?: string[];
       prioritySettings?: import('./services/todoistService').PrioritySettingsInput;
@@ -264,7 +380,7 @@ app.post('/api/todoist/sync-assignments', async (req, res) => {
       return res.status(400).json({ error: 'courseIds must be a non-empty array' });
     }
 
-    const result = await syncAssignmentsToTodoist(courseIds, prioritySettings);
+    const result = await syncAssignmentsToTodoist(userId, courseIds, prioritySettings);
     return res.json({
       message: 'Synced assignments to Todoist',
       ...result,
@@ -278,16 +394,18 @@ app.post('/api/todoist/sync-assignments', async (req, res) => {
   }
 });
 
-app.get('/api/auto-sync', (_req, res) => {
+app.get('/api/auto-sync', requireAuth, (_req, res) => {
   return res.json({
     enabled: autoSyncIntervalMinutes > 0,
     intervalMinutes: autoSyncIntervalMinutes,
   });
 });
 
-app.get('/api/sync-runs', async (_req, res) => {
+app.get('/api/sync-runs', requireAuth, async (req, res) => {
   try {
+    const userId = getUserIdFromRequest(req);
     const runs = await prisma.syncRun.findMany({
+      where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
@@ -307,7 +425,10 @@ app.get('/api/sync-runs', async (_req, res) => {
   }
 });
 
-app.post('/api/auto-sync', (req, res) => {
+let autoSyncUserId: string | null = null;
+
+app.post('/api/auto-sync', requireAuth, (req, res) => {
+  const userId = getUserIdFromRequest(req);
   const { enabled, intervalMinutes } = req.body as {
     enabled?: boolean;
     intervalMinutes?: number;
@@ -315,10 +436,12 @@ app.post('/api/auto-sync', (req, res) => {
 
   if (!enabled) {
     configureAutoSync(0);
+    autoSyncUserId = null;
     return res.json({ enabled: false, intervalMinutes: 0 });
   }
 
   const minutes = typeof intervalMinutes === 'number' && intervalMinutes > 0 ? intervalMinutes : 60;
+  autoSyncUserId = userId;
   configureAutoSync(minutes);
   return res.json({ enabled: true, intervalMinutes: minutes });
 });

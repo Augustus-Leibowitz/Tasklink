@@ -55,6 +55,13 @@ type DetectionSettings = {
   // whether to include assignments that have no due date
   includeNoDueDate: boolean;
 };
+
+type AuthState = 'unknown' | 'unauthenticated' | 'authenticated';
+
+type CurrentUser = {
+  email: string | null;
+};
+
 type BackendStatus = {
   canvasConfigured: boolean;
   canvasBaseUrl: string | null;
@@ -70,6 +77,15 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000
 export const App: React.FC = () => {
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
+
+  const [authState, setAuthState] = useState<AuthState>('unknown');
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [rememberMe, setRememberMe] = useState(true);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'system'>('system');
   const [systemPrefersDark, setSystemPrefersDark] = useState(true);
@@ -122,14 +138,12 @@ export const App: React.FC = () => {
   const [autoSyncIntervalMinutes, setAutoSyncIntervalMinutes] = useState(0);
   const [autoSyncSaving, setAutoSyncSaving] = useState(false);
 
+  // Check backend health independently so we can show it even on the login screen.
   useEffect(() => {
-    const fetchHealthAndStatus = async () => {
+    const checkHealth = async () => {
       try {
         setStatus('loading');
-        const [healthRes, statusRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/health`),
-          fetch(`${API_BASE_URL}/api/status`),
-        ]);
+        const healthRes = await fetch(`${API_BASE_URL}/health`);
 
         if (!healthRes.ok) {
           throw new Error('Health check failed with status ' + healthRes.status);
@@ -143,6 +157,60 @@ export const App: React.FC = () => {
           setStatus('error');
           setMessage('Unexpected health response from backend');
         }
+      } catch (err) {
+        setStatus('error');
+        if (err instanceof Error) {
+          setMessage(err.message);
+        } else {
+          setMessage('Unknown error');
+        }
+      }
+    };
+
+    void checkHealth();
+  }, []);
+
+  // Check auth status on load.
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/me`, {
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          setAuthState('unauthenticated');
+          return;
+        }
+
+        const body = (await res.json()) as {
+          authenticated?: boolean;
+          user?: { email?: string | null };
+        };
+
+        if (body.authenticated && body.user) {
+          setAuthState('authenticated');
+          setCurrentUser({ email: body.user.email ?? null });
+        } else {
+          setAuthState('unauthenticated');
+        }
+      } catch {
+        setAuthState('unauthenticated');
+      }
+    };
+
+    void checkAuth();
+  }, []);
+
+  // Once authenticated, load status + recent sync runs.
+  useEffect(() => {
+    if (authState !== 'authenticated') return;
+
+    const fetchStatusAndSync = async () => {
+      try {
+        const statusRes = await fetch(`${API_BASE_URL}/api/status`, {
+          credentials: 'include',
+        });
 
         if (statusRes.ok) {
           const s = (await statusRes.json()) as {
@@ -168,7 +236,6 @@ export const App: React.FC = () => {
           }
         }
 
-        // Load recent sync history for the Overview and history card.
         try {
           await loadSyncRuns();
         } catch {
@@ -184,8 +251,8 @@ export const App: React.FC = () => {
       }
     };
 
-    void fetchHealthAndStatus();
-  }, []);
+    void fetchStatusAndSync();
+  }, [authState]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -356,7 +423,9 @@ export const App: React.FC = () => {
       setAssignmentsLoading(true);
       setAssignmentsError(null);
 
-      const res = await fetch(`${API_BASE_URL}/api/assignments/upcoming`);
+      const res = await fetch(`${API_BASE_URL}/api/assignments/upcoming`, {
+        credentials: 'include',
+      });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Request failed with status ' + res.status);
@@ -384,7 +453,9 @@ export const App: React.FC = () => {
       setCoursesLoading(true);
       setCoursesError(null);
 
-      const res = await fetch(`${API_BASE_URL}/api/courses`);
+      const res = await fetch(`${API_BASE_URL}/api/courses`, {
+        credentials: 'include',
+      });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Request failed with status ' + res.status);
@@ -416,6 +487,7 @@ export const App: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({
           daysAhead: detectionSettings.daysAhead,
           includeNoDueDate: detectionSettings.includeNoDueDate,
@@ -464,6 +536,7 @@ export const App: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({ accessToken: todoistToken }),
       });
 
@@ -487,7 +560,9 @@ export const App: React.FC = () => {
       setTodoistProjectsLoading(true);
       setTodoistError(null);
 
-      const res = await fetch(`${API_BASE_URL}/api/todoist/projects`);
+      const res = await fetch(`${API_BASE_URL}/api/todoist/projects`, {
+        credentials: 'include',
+      });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Request failed with status ' + res.status);
@@ -517,6 +592,7 @@ export const App: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({ courseId, todoistProjectId }),
       });
 
@@ -563,6 +639,7 @@ export const App: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({ courseIds: syncSelectedCourseIds, prioritySettings }),
       });
 
@@ -597,6 +674,7 @@ export const App: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify({ enabled, intervalMinutes }),
       });
 
@@ -705,7 +783,9 @@ export const App: React.FC = () => {
       setSyncRunsLoading(true);
       setSyncRunsError(null);
 
-      const res = await fetch(`${API_BASE_URL}/api/sync-runs`);
+      const res = await fetch(`${API_BASE_URL}/api/sync-runs`, {
+        credentials: 'include',
+      });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Request failed with status ' + res.status);
@@ -748,6 +828,61 @@ export const App: React.FC = () => {
 
   const effectiveTheme: 'light' | 'dark' =
     themeMode === 'system' ? (systemPrefersDark ? 'dark' : 'light') : themeMode;
+
+  const handleSubmitAuth = async () => {
+    try {
+      setAuthLoading(true);
+      setAuthError(null);
+
+      const email = authEmail.trim();
+      const password = authPassword;
+      if (!email || !password) {
+        setAuthError('Email and password are required.');
+        return;
+      }
+
+      const endpoint = authMode === 'login' ? '/auth/login' : '/auth/register';
+      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ email, password, remember: rememberMe }),
+      });
+
+      const body = (await res.json().catch(() => ({}))) as { error?: string; user?: { email?: string | null } };
+
+      if (!res.ok) {
+        throw new Error(body.error || 'Authentication failed');
+      }
+
+      setAuthState('authenticated');
+      setCurrentUser({ email: body.user?.email ?? email });
+      setAuthPassword('');
+    } catch (err) {
+      if (err instanceof Error) {
+        setAuthError(err.message);
+      } else {
+        setAuthError('Unknown authentication error');
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch {
+      // ignore
+    }
+    setAuthState('unauthenticated');
+    setCurrentUser(null);
+  };
 
   const renderHelpContent = (topic: HelpTopic) => {
     if (topic === 'canvasConfig') {
@@ -808,6 +943,137 @@ export const App: React.FC = () => {
     );
   };
 
+  // If we don't yet know auth status, show a simple loading shell.
+  if (authState === 'unknown') {
+    return (
+      <div className={"app-root " + (effectiveTheme === 'light' ? 'theme-light' : 'theme-dark')}>
+        <div className="app-shell">
+          <header className="app-header">
+            <div>
+              <div className="app-title">Tasklink</div>
+              <div className="app-subtitle">Keep Canvas assignments and Todoist tasks in sync.</div>
+            </div>
+            <div className="badge-row">
+              <span className={"badge " + (status === 'ok' ? 'badge-ok' : 'badge-warn')}>
+                Backend: {status}
+              </span>
+            </div>
+          </header>
+          <section className="card">
+            <div className="card-title">Loading…</div>
+            <p className="status-text">Checking your session.</p>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  // Unauthenticated landing page with email/password sign-in.
+  if (authState === 'unauthenticated') {
+    const isLogin = authMode === 'login';
+    return (
+      <div className={"app-root " + (effectiveTheme === 'light' ? 'theme-light' : 'theme-dark')}>
+        <div className="app-shell">
+          <header className="app-header">
+            <div>
+              <div className="app-title">Tasklink</div>
+              <div className="app-subtitle">Keep Canvas assignments and Todoist tasks in sync.</div>
+            </div>
+            <div className="badge-row">
+              <span className={"badge " + (status === 'ok' ? 'badge-ok' : 'badge-warn')}>
+                Backend: {status}
+              </span>
+            </div>
+          </header>
+
+          <section className="card" style={{ maxWidth: '480px', margin: '0 auto' }}>
+            <div className="card-header">
+              <div className="card-title">{isLogin ? 'Sign in' : 'Create account'}</div>
+            </div>
+            <div className="card-description">
+              {isLogin
+                ? 'Sign in with your email and password to use Tasklink. Each account keeps its own Canvas and Todoist settings.'
+                : 'Create a Tasklink account with your email and a password. You can then connect Canvas and Todoist for that account.'}
+            </div>
+            <div className="field-group">
+              <label className="field-label">Email</label>
+              <input
+                className="input"
+                type="email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                autoComplete="email"
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label">Password</label>
+              <input
+                className="input"
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                autoComplete={isLogin ? 'current-password' : 'new-password'}
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label">Session</label>
+              <label style={{ fontSize: '0.85rem' }}>
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  style={{ marginRight: '0.4rem' }}
+                />
+                Keep me signed in on this device
+              </label>
+            </div>
+            {authError && (
+              <p className="status-text" style={{ color: '#f97373', marginTop: '0.4rem' }}>
+                {authError}
+              </p>
+            )}
+            <div className="button-row" style={{ marginTop: '0.5rem' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSubmitAuth}
+                disabled={authLoading || !authEmail || !authPassword}
+              >
+                {authLoading ? (isLogin ? 'Signing in…' : 'Creating account…') : isLogin ? 'Sign in' : 'Create account'}
+              </button>
+            </div>
+            <div style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}>
+              {isLogin ? (
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setAuthError(null);
+                  }}
+                >
+                  New here? Create an account instead.
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                  }}
+                >
+                  Already have an account? Sign in instead.
+                </button>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  // Authenticated app
   return (
     <div className={"app-root " + (effectiveTheme === 'light' ? 'theme-light' : 'theme-dark')}>
       <div className="app-shell">
@@ -830,12 +1096,22 @@ export const App: React.FC = () => {
                 </span>
               </>
             )}
+            {currentUser && (
+              <span className="badge badge-pill">{currentUser.email ?? 'Signed in'}</span>
+            )}
             <button
               type="button"
               className="icon-button"
               onClick={() => setView('settings')}
             >
               ⚙ Settings
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={handleLogout}
+            >
+              Sign out
             </button>
           </div>
         </header>

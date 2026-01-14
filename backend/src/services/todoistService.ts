@@ -4,6 +4,7 @@ import { prisma } from '../prisma';
 const TODOIST_API_BASE = 'https://api.todoist.com/rest/v2';
 
 export interface UpsertTodoistConfigParams {
+  userId: string;
   accessToken: string;
 }
 
@@ -29,19 +30,7 @@ interface TodoistTaskCreateResponse {
   id: string;
 }
 
-async function getOrCreateSingleUserId(): Promise<string> {
-  const existing = await prisma.user.findFirst();
-  if (existing) return existing.id;
-
-  const created = await prisma.user.create({
-    data: {},
-  });
-  return created.id;
-}
-
-export async function upsertTodoistConfig({ accessToken }: UpsertTodoistConfigParams) {
-  const userId = await getOrCreateSingleUserId();
-
+export async function upsertTodoistConfig({ userId, accessToken }: UpsertTodoistConfigParams) {
   const account = await prisma.todoistAccount.upsert({
     where: { userId },
     update: {
@@ -56,8 +45,9 @@ export async function upsertTodoistConfig({ accessToken }: UpsertTodoistConfigPa
   return { userId, account };
 }
 
-export async function fetchTodoistProjects(): Promise<TodoistProject[]> {
-  const user = await prisma.user.findFirst({
+export async function fetchTodoistProjects(userId: string): Promise<TodoistProject[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
     include: { todoistAccount: true },
   });
 
@@ -179,6 +169,7 @@ function bucketToTodoistPriority(bucket: PriorityKey, settings: NormalizedPriori
 }
 
 export async function syncAssignmentsToTodoist(
+  userId: string,
   courseIds: string[],
   prioritySettings?: PrioritySettingsInput,
 ): Promise<{
@@ -189,7 +180,8 @@ export async function syncAssignmentsToTodoist(
     return { created: 0, skipped: 0 };
   }
 
-  const user = await prisma.user.findFirst({
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
     include: { todoistAccount: true },
   });
 
@@ -236,6 +228,7 @@ export async function syncAssignmentsToTodoist(
     const courses = await prisma.course.findMany({
       where: {
         id: { in: courseIds },
+        userId,
         todoistProjectId: { not: null },
       },
     });
