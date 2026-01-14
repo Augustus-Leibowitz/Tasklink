@@ -31,7 +31,9 @@ export function setSessionCookie(res: Response, payload: SessionPayload) {
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    // Frontend and backend are on different subdomains (Render), so we need SameSite=None
+    // for the cookie to be sent on cross-site fetch requests with credentials: 'include'.
+    sameSite: 'none',
     path: '/',
     maxAge: maxAgeSeconds ? maxAgeSeconds * 1000 : undefined,
   });
@@ -41,7 +43,7 @@ export function clearSessionCookie(res: Response) {
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: 'none',
     path: '/',
   });
 }
