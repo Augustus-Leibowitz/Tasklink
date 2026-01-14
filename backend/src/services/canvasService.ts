@@ -110,7 +110,10 @@ export async function fetchAndStoreUpcomingAssignments(
     {
       headers: authHeaders,
       params: {
-        enrollment_state: 'active',
+        // Include active and invited/pending enrollments so newly added or not-yet-started
+        // courses still appear in Tasklink.
+        'enrollment_state[]': ['active', 'invited_or_pending'],
+        'enrollment_type[]': ['student'],
         per_page: 50,
       },
     },

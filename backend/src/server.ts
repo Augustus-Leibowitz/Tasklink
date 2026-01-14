@@ -163,14 +163,25 @@ app.post('/auth/logout', (_req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/status', async (_req, res) => {
+app.get('/api/status', requireAuth, async (req, res) => {
   try {
-    const user = await prisma.user.findFirst({
+    const userId = getUserIdFromRequest(req);
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
       include: { canvasAccount: true, todoistAccount: true },
     });
 
-    const coursesCount = await prisma.course.count();
-    const assignmentsCount = await prisma.assignment.count();
+    const coursesCount = await prisma.course.count({ where: { userId } });
+    const assignmentsCount = await prisma.assignment.count({ where: { course: { userId } } });
+
+    const storedInterval = user?.autoSyncIntervalMinutes ?? 0;
+
+    // If this user has auto-sync configured in the database but the in-memory scheduler
+    // is not aligned (e.g., after a cold start), reconfigure it now.
+    if (storedInterval > 0 && (autoSyncUserId !== userId || autoSyncIntervalMinutes !== storedInterval)) {
+      autoSyncUserId = userId;
+      configureAutoSync(storedInterval);
+    }
 
     return res.json({
       canvas: {
@@ -185,8 +196,8 @@ app.get('/api/status', async (_req, res) => {
         assignmentsCount,
       },
       autoSync: {
-        enabled: autoSyncIntervalMinutes > 0,
-        intervalMinutes: autoSyncIntervalMinutes,
+        enabled: storedInterval > 0,
+        intervalMinutes: storedInterval,
       },
     });
   } catch (err) {
@@ -427,7 +438,7 @@ app.get('/api/sync-runs', requireAuth, async (req, res) => {
 
 let autoSyncUserId: string | null = null;
 
-app.post('/api/auto-sync', requireAuth, (req, res) => {
+app.post('/api/auto-sync', requireAuth, async (req, res) => {
   const userId = getUserIdFromRequest(req);
   const { enabled, intervalMinutes } = req.body as {
     enabled?: boolean;
@@ -437,12 +448,20 @@ app.post('/api/auto-sync', requireAuth, (req, res) => {
   if (!enabled) {
     configureAutoSync(0);
     autoSyncUserId = null;
+    await prisma.user.update({
+      where: { id: userId },
+      data: { autoSyncIntervalMinutes: null },
+    });
     return res.json({ enabled: false, intervalMinutes: 0 });
   }
 
   const minutes = typeof intervalMinutes === 'number' && intervalMinutes > 0 ? intervalMinutes : 60;
   autoSyncUserId = userId;
   configureAutoSync(minutes);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { autoSyncIntervalMinutes: minutes },
+  });
   return res.json({ enabled: true, intervalMinutes: minutes });
 });
 

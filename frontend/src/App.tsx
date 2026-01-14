@@ -108,6 +108,7 @@ export const App: React.FC = () => {
   const [todoistProjects, setTodoistProjects] = useState<TodoistProject[]>([]);
   const [todoistProjectsLoading, setTodoistProjectsLoading] = useState(false);
   const [todoistError, setTodoistError] = useState<string | null>(null);
+  const [todoistResult, setTodoistResult] = useState<string | null>(null);
 
   const [courses, setCourses] = useState<UiCourse[]>([]);
   const [coursesLoading, setCoursesLoading] = useState(false);
@@ -531,8 +532,7 @@ export const App: React.FC = () => {
     try {
       setTodoistSaving(true);
       setTodoistError(null);
-
-      const res = await fetch(`${API_BASE_URL}/api/todoist/config`, {
+       const res = await fetch(`${API_BASE_URL}/api/todoist/config`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -541,10 +541,13 @@ export const App: React.FC = () => {
         body: JSON.stringify({ accessToken: todoistToken }),
       });
 
+      const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || 'Request failed with status ' + res.status);
       }
+
+      setTodoistResult(body.message ?? 'Todoist configuration saved.');
     } catch (err) {
       if (err instanceof Error) {
         setTodoistError(err.message);
@@ -560,8 +563,7 @@ export const App: React.FC = () => {
     try {
       setTodoistProjectsLoading(true);
       setTodoistError(null);
-
-      const res = await fetch(`${API_BASE_URL}/api/todoist/projects`, {
+       const res = await fetch(`${API_BASE_URL}/api/todoist/projects`, {
         credentials: 'include',
       });
       if (!res.ok) {
@@ -570,7 +572,11 @@ export const App: React.FC = () => {
       }
 
       const body = (await res.json()) as { projects?: TodoistProject[] };
-      setTodoistProjects(body.projects ?? []);
+      const projects = body.projects ?? [];
+      setTodoistProjects(projects);
+      if (projects.length > 0) {
+        setTodoistResult(`Loaded ${projects.length} project${projects.length === 1 ? '' : 's'}.`);
+      }
 
       if (courses.length === 0) {
         await loadCourses();
@@ -1504,31 +1510,36 @@ export const App: React.FC = () => {
                   onChange={(e) => setTodoistToken(e.target.value)}
                 />
               </div>
-              <div className="button-row">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleSaveTodoistConfig}
-                  disabled={todoistSaving || !todoistToken}
-                >
-                  {todoistSaving ? 'Saving…' : 'Save config'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={handleLoadTodoistProjects}
-                  disabled={todoistProjectsLoading}
-                >
-                  {todoistProjectsLoading ? 'Loading…' : 'Load projects'}
-                </button>
-              </div>
-              {todoistError && (
-                <p className="status-text" style={{ color: '#f97373', marginTop: '0.4rem' }}>
-                  {todoistError}
-                </p>
-              )}
-              {todoistProjects.length > 0 && (
-                <div style={{ marginTop: '0.9rem' }}>
+            <div className="button-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveTodoistConfig}
+                disabled={todoistSaving || !todoistToken}
+              >
+                {todoistSaving ? 'Saving…' : 'Save config'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={handleLoadTodoistProjects}
+                disabled={todoistProjectsLoading}
+              >
+                {todoistProjectsLoading ? 'Loading…' : 'Load projects'}
+              </button>
+            </div>
+            {todoistResult && (
+              <p className="status-text" style={{ color: '#4ade80', marginTop: '0.4rem' }}>
+                {todoistResult}
+              </p>
+            )}
+            {todoistError && (
+              <p className="status-text" style={{ color: '#f97373', marginTop: '0.4rem' }}>
+                {todoistError}
+              </p>
+            )}
+            {todoistProjects.length > 0 && (
+              <div style={{ marginTop: '0.9rem' }}>
                   <div className="field-label" style={{ marginBottom: '0.25rem' }}>
                     Todoist projects
                   </div>
