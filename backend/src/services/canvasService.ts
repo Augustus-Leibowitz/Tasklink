@@ -105,21 +105,46 @@ export async function fetchAndStoreUpcomingAssignments(
     Authorization: `Bearer ${accessToken}`,
   };
 
-  const coursesResponse = await axios.get<CanvasCourse[]>(
+  // Fetch active courses first (the common case).
+  const activeCoursesResponse = await axios.get<CanvasCourse[]>(
     `${baseUrl}/api/v1/courses`,
     {
       headers: authHeaders,
       params: {
-        // Include active and invited/pending enrollments so newly added or not-yet-started
-        // courses still appear in Tasklink.
-        'enrollment_state[]': ['active', 'invited_or_pending'],
-        'enrollment_type[]': ['student'],
+        enrollment_state: 'active',
         per_page: 50,
       },
     },
   );
 
-  const courses = coursesResponse.data;
+  let courses: CanvasCourse[] = activeCoursesResponse.data ?? [];
+
+  // Best-effort: try to also include invited/pending courses so newly added ones
+  // show up even before the term fully starts. If Canvas does not support this
+  // on a given instance, ignore the error instead of failing the whole run.
+  try {
+    const pendingResponse = await axios.get<CanvasCourse[]>(
+      `${baseUrl}/api/v1/courses`,
+      {
+        headers: authHeaders,
+        params: {
+          enrollment_state: 'invited_or_pending',
+          per_page: 50,
+        },
+      },
+    );
+    const pending = pendingResponse.data ?? [];
+    const seen = new Set(courses.map((c) => c.id));
+    for (const c of pending) {
+      if (!seen.has(c.id)) {
+        courses.push(c);
+        seen.add(c.id);
+      }
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('Canvas invited_or_pending courses request failed; continuing with active courses only.', err);
+  }
 
   let coursesProcessed = 0;
   let assignmentsUpserted = 0;
@@ -153,20 +178,21 @@ export async function fetchAndStoreUpcomingAssignments(
 
     coursesProcessed += 1;
 
-    const assignmentsResponse = await axios.get<CanvasAssignment[]>(
-      `${baseUrl}/api/v1/courses/${course.id}/assignments`,
-      {
-        headers: authHeaders,
-        params: {
-          // No bucket filter: fetch all assignments for the course.
-          per_page: 50,
+    try {
+      const assignmentsResponse = await axios.get<CanvasAssignment[]>(
+        `${baseUrl}/api/v1/courses/${course.id}/assignments`,
+        {
+          headers: authHeaders,
+          params: {
+            // No bucket filter: fetch all assignments for the course.
+            per_page: 50,
+          },
         },
-      },
-    );
+      );
 
-    const assignments = assignmentsResponse.data;
+      const assignments = assignmentsResponse.data;
 
-    for (const assignment of assignments) {
+      for (const assignment of assignments) {
       if (!assignment.id || !assignment.name) continue;
 
       const dueDate = normalizeDueDate(assignment.due_at);
@@ -213,7 +239,13 @@ export async function fetchAndStoreUpcomingAssignments(
 
       assignmentsUpserted += 1;
     }
+  } catch (err) {
+    // If fetching assignments for a single course fails, log and continue so that
+    // other courses can still be processed.
+    // eslint-disable-next-line no-console
+    console.error(`Failed to fetch assignments for Canvas course ${course.id}`, err);
   }
+}
 
-  return { coursesProcessed, assignmentsUpserted };
+return { coursesProcessed, assignmentsUpserted };
 }
