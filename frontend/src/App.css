@@ -398,6 +398,20 @@ body {
   border-color: rgba(148, 163, 184, 0.35);
 }
 
+.link-button {
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--primary-blue);
+  padding: 0.32rem 0.9rem;
+  cursor: pointer;
+  background: var(--primary-blue);
+  color: #ffffff;
+}
+
+.link-button:hover {
+  filter: brightness(0.95);
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: default;
