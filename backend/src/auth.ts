@@ -70,10 +70,13 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const userId = (req as any).userId as string | undefined;
-  if (!userId) {
+  const session = getSessionFromRequest(req);
+  if (!session) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
+  // Ensure downstream handlers can still read userId/email from the request.
+  (req as any).userId = session.userId;
+  (req as any).userEmail = session.email ?? null;
   return next();
 }
 
