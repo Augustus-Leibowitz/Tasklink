@@ -30,6 +30,15 @@ interface TodoistTaskCreateResponse {
   id: string;
 }
 
+interface TodoistTask {
+  id: string;
+  content: string;
+  project_id: string;
+  due?: {
+    date?: string | null;
+  } | null;
+}
+
 export async function upsertTodoistConfig({ userId, accessToken }: UpsertTodoistConfigParams) {
   const account = await prisma.todoistAccount.upsert({
     where: { userId },
@@ -247,6 +256,46 @@ export async function syncAssignmentsToTodoist(
       include: { course: true },
     });
 
+    // Build a cache of existing Todoist tasks per project so we can avoid
+    // creating duplicates on resync. We key by project + content + due date.
+    const projectIds = Array.from(
+      new Set(
+        courses
+          .map((c) => c.todoistProjectId)
+          .filter((p): p is string => typeof p === 'string' && p.length > 0),
+      ),
+    );
+
+    const existingTasksByKey = new Map<string, string>();
+
+    const makeTaskKey = (projectId: string, content: string, dueDate: string | null) =>
+      `${projectId}::${content.trim()}::${dueDate ?? ''}`;
+
+    for (const projectId of projectIds) {
+      try {
+        const res = await axios.get<TodoistTask[]>(`${TODOIST_API_BASE}/tasks`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          params: {
+            project_id: projectId,
+          },
+        });
+
+        for (const task of res.data ?? []) {
+          const key = makeTaskKey(projectId, task.content, task.due?.date ?? null);
+          if (!existingTasksByKey.has(key)) {
+            existingTasksByKey.set(key, task.id);
+          }
+        }
+      } catch (err) {
+        // If fetching tasks for a project fails, log and continue. We'll still
+        // avoid duplicates for projects we could read.
+        // eslint-disable-next-line no-console
+        console.warn(`Failed to load existing Todoist tasks for project ${projectId}`, err);
+      }
+    }
+
     let created = 0;
     let skipped = 0;
 
@@ -275,8 +324,25 @@ export async function syncAssignmentsToTodoist(
       const todoistPriority = bucketToTodoistPriority(conceptualBucket, normalizedSettings);
       const dueDate = toTodoistDate(assignment.dueDate);
 
-      // If the assignment doesn't have a Todoist task yet, create one.
+      // If the assignment doesn't have a Todoist task yet, first try to link it
+      // to an existing Todoist task with the same project, content, and due date.
+      // This prevents duplicate tasks when re-syncing.
       if (!assignment.todoistTaskId) {
+        const taskKey = makeTaskKey(course.todoistProjectId, assignment.name, dueDate ?? null);
+        const existingTaskId = existingTasksByKey.get(taskKey);
+
+        if (existingTaskId) {
+          await prisma.assignment.update({
+            where: { id: assignment.id },
+            data: {
+              todoistTaskId: existingTaskId,
+              lastSyncedAt: new Date(),
+            },
+          });
+          skipped += 1;
+          continue;
+        }
+
         const body: Record<string, unknown> = {
           content: assignment.name,
           project_id: course.todoistProjectId,
@@ -302,6 +368,10 @@ export async function syncAssignmentsToTodoist(
               lastSyncedAt: new Date(),
             },
           });
+
+          // Track this newly created task in our cache so we don't create
+          // another one for the same assignment during this sync run.
+          existingTasksByKey.set(taskKey, res.data.id);
 
           created += 1;
         } catch (err) {
