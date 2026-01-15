@@ -257,7 +257,9 @@ export async function syncAssignmentsToTodoist(
     });
 
     // Build a cache of existing Todoist tasks per project so we can avoid
-    // creating duplicates on resync. We key by project + content + due date.
+    // creating duplicates on resync and can update due dates for matching tasks.
+    // We key by project + content (title) and ignore existing due dates, since
+    // Tasklink's normalized due date is the source of truth.
     const projectIds = Array.from(
       new Set(
         courses
@@ -268,8 +270,8 @@ export async function syncAssignmentsToTodoist(
 
     const existingTasksByKey = new Map<string, string>();
 
-    const makeTaskKey = (projectId: string, content: string, dueDate: string | null) =>
-      `${projectId}::${content.trim()}::${dueDate ?? ''}`;
+    const makeTaskKey = (projectId: string, content: string) =>
+      `${projectId}::${content.trim()}`;
 
     for (const projectId of projectIds) {
       try {
@@ -283,7 +285,7 @@ export async function syncAssignmentsToTodoist(
         });
 
         for (const task of res.data ?? []) {
-          const key = makeTaskKey(projectId, task.content, task.due?.date ?? null);
+          const key = makeTaskKey(projectId, task.content);
           if (!existingTasksByKey.has(key)) {
             existingTasksByKey.set(key, task.id);
           }
@@ -325,21 +327,48 @@ export async function syncAssignmentsToTodoist(
       const dueDate = toTodoistDate(assignment.dueDate);
 
       // If the assignment doesn't have a Todoist task yet, first try to link it
-      // to an existing Todoist task with the same project, content, and due date.
-      // This prevents duplicate tasks when re-syncing.
+      // to an existing Todoist task with the same project and title. When a
+      // match is found, we also update the Todoist task's due date and priority
+      // to reflect the normalized Canvas due date.
       if (!assignment.todoistTaskId) {
-        const taskKey = makeTaskKey(course.todoistProjectId, assignment.name, dueDate ?? null);
+        const taskKey = makeTaskKey(course.todoistProjectId, assignment.name);
         const existingTaskId = existingTasksByKey.get(taskKey);
 
         if (existingTaskId) {
-          await prisma.assignment.update({
-            where: { id: assignment.id },
-            data: {
-              todoistTaskId: existingTaskId,
-              lastSyncedAt: new Date(),
-            },
-          });
-          skipped += 1;
+          try {
+            const updateBody: Record<string, unknown> = {
+              priority: todoistPriority,
+            };
+            if (dueDate) {
+              (updateBody as any).due_date = dueDate;
+            } else {
+              (updateBody as any).due_date = null;
+            }
+
+            await axios.post(
+              `${TODOIST_API_BASE}/tasks/${existingTaskId}`,
+              updateBody,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+                },
+              },
+            );
+
+            await prisma.assignment.update({
+              where: { id: assignment.id },
+              data: {
+                todoistTaskId: existingTaskId,
+                lastSyncedAt: new Date(),
+              },
+            });
+            skipped += 1;
+          } catch (err) {
+            // If updating the existing task fails (e.g., it was deleted), fall
+            // back to creating a new one below.
+          }
+
           continue;
         }
 
@@ -381,12 +410,21 @@ export async function syncAssignmentsToTodoist(
         continue;
       }
 
-      // For assignments that already have a Todoist task, update priority so it keeps
-      // moving automatically as the due date approaches.
+      // For assignments that already have a Todoist task, update both priority
+      // and due date so they stay aligned with Canvas.
       try {
+        const updateBody: Record<string, unknown> = {
+          priority: todoistPriority,
+        };
+        if (dueDate) {
+          (updateBody as any).due_date = dueDate;
+        } else {
+          (updateBody as any).due_date = null;
+        }
+
         await axios.post(
           `${TODOIST_API_BASE}/tasks/${assignment.todoistTaskId}`,
-          { priority: todoistPriority },
+          updateBody,
           {
             headers: {
               Authorization: `Bearer ${accessToken}`,
