@@ -56,20 +56,28 @@ interface CanvasAssignment {
 
 // Canvas often encodes "end of day" deadlines as very-early-morning timestamps (e.g., 1–2am).
 // To avoid confusion in a date-only view, we treat any local time between 00:00 and 03:59
-// as belonging to the *previous* calendar day.
+// as belonging to the *previous* calendar day, and we store due dates as date-only (midnight).
 function normalizeDueDate(dueAt: string | null | undefined): Date | null {
   if (!dueAt) return null;
-  const date = new Date(dueAt);
-  if (Number.isNaN(date.getTime())) return null;
+  const raw = new Date(dueAt);
+  if (Number.isNaN(raw.getTime())) return null;
 
-  const hour = date.getHours();
+  let year = raw.getFullYear();
+  let month = raw.getMonth();
+  let day = raw.getDate();
+
+  const hour = raw.getHours();
   if (hour >= 0 && hour < 4) {
-    const adjusted = new Date(date);
+    const adjusted = new Date(raw);
     adjusted.setDate(adjusted.getDate() - 1);
-    return adjusted;
+    year = adjusted.getFullYear();
+    month = adjusted.getMonth();
+    day = adjusted.getDate();
   }
 
-  return date;
+  // Return a date set to local midnight of the logical due date so downstream
+  // code and the UI can treat it purely as a date without time-of-day shifts.
+  return new Date(year, month, day);
 }
 
 export async function fetchAndStoreUpcomingAssignments(
