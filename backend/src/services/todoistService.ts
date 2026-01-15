@@ -183,10 +183,11 @@ export async function syncAssignmentsToTodoist(
   prioritySettings?: PrioritySettingsInput,
 ): Promise<{
   created: number;
+  updated: number;
   skipped: number;
 }> {
   if (courseIds.length === 0) {
-    return { created: 0, skipped: 0 };
+    return { created: 0, updated: 0, skipped: 0 };
   }
 
   const user = await prisma.user.findUnique({
@@ -211,13 +212,13 @@ export async function syncAssignmentsToTodoist(
     },
   });
 
-  const markSuccess = async (created: number, skipped: number) => {
+  const markSuccess = async (created: number, updated: number, skipped: number) => {
     await prisma.syncRun.update({
       where: { id: syncRun.id },
       data: {
         finishedAt: new Date(),
         status: 'SUCCESS',
-        message: `Created ${created} task(s), skipped ${skipped}.`,
+        message: `Created ${created} task(s), updated ${updated}, skipped ${skipped}.`,
       },
     });
   };
@@ -243,8 +244,8 @@ export async function syncAssignmentsToTodoist(
     });
 
     if (courses.length === 0) {
-      await markSuccess(0, 0);
-      return { created: 0, skipped: 0 };
+      await markSuccess(0, 0, 0);
+      return { created: 0, updated: 0, skipped: 0 };
     }
 
     const courseById = new Map(courses.map((c) => [c.id, c]));
@@ -299,6 +300,7 @@ export async function syncAssignmentsToTodoist(
     }
 
     let created = 0;
+    let updated = 0;
     let skipped = 0;
 
     for (const assignment of assignments) {
@@ -363,7 +365,7 @@ export async function syncAssignmentsToTodoist(
                 lastSyncedAt: new Date(),
               },
             });
-            skipped += 1;
+            updated += 1;
           } catch (err) {
             // If updating the existing task fails (e.g., it was deleted), fall
             // back to creating a new one below.
@@ -439,6 +441,7 @@ export async function syncAssignmentsToTodoist(
             lastSyncedAt: new Date(),
           },
         });
+        updated += 1;
       } catch (err) {
         // If the task no longer exists in Todoist (e.g., deleted manually), clear the
         // todoistTaskId so that a future sync can recreate it.
@@ -453,8 +456,8 @@ export async function syncAssignmentsToTodoist(
       }
     }
 
-    await markSuccess(created, skipped);
-    return { created, skipped };
+    await markSuccess(created, updated, skipped);
+    return { created, updated, skipped };
   } catch (err) {
     await markError(err);
     throw err;

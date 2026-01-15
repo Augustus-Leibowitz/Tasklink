@@ -655,10 +655,12 @@ export const App: React.FC = () => {
         throw new Error(body.error || 'Request failed with status ' + res.status);
       }
 
-      const body = (await res.json()) as { message?: string; created?: number; skipped?: number };
+      const body = (await res.json()) as { message?: string; created?: number; updated?: number; skipped?: number };
       const text =
         'Created ' +
         (body.created ?? 0) +
+        ', updated ' +
+        (body.updated ?? 0) +
         ' Todoist tasks, skipped ' +
         (body.skipped ?? 0) +
         ' (already synced or missing project).';
