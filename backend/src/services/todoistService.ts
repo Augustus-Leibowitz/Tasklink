@@ -340,12 +340,8 @@ export async function syncAssignmentsToTodoist(
           try {
             const updateBody: Record<string, unknown> = {
               priority: todoistPriority,
+              due: dueDate ? { date: dueDate } : null,
             };
-            if (dueDate) {
-              (updateBody as any).due_date = dueDate;
-            } else {
-              (updateBody as any).due_date = null;
-            }
 
             await axios.post(
               `${TODOIST_API_BASE}/tasks/${existingTaskId}`,
@@ -417,12 +413,8 @@ export async function syncAssignmentsToTodoist(
       try {
         const updateBody: Record<string, unknown> = {
           priority: todoistPriority,
+          due: dueDate ? { date: dueDate } : null,
         };
-        if (dueDate) {
-          (updateBody as any).due_date = dueDate;
-        } else {
-          (updateBody as any).due_date = null;
-        }
 
         await axios.post(
           `${TODOIST_API_BASE}/tasks/${assignment.todoistTaskId}`,
