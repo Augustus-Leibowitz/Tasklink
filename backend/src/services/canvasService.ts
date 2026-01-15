@@ -54,30 +54,36 @@ interface CanvasAssignment {
   due_at?: string | null;
 }
 
-// Canvas often encodes "end of day" deadlines as very-early-morning timestamps (e.g., 1–2am).
-// To avoid confusion in a date-only view, we treat any local time between 00:00 and 03:59
-// as belonging to the *previous* calendar day, and we store due dates as date-only (midnight).
+// Canvas often encodes due dates as timestamps in the institution's local timezone.
+// This school is on Pacific Time, so we interpret all Canvas `due_at` values in
+// America/Los_Angeles, then drop the time-of-day and store a date-only value.
+// We materialize that date as **midday UTC** so that viewing the date from any
+// user timezone will not shift it to the previous/next calendar day.
 function normalizeDueDate(dueAt: string | null | undefined): Date | null {
   if (!dueAt) return null;
-  const raw = new Date(dueAt);
-  if (Number.isNaN(raw.getTime())) return null;
+  const instant = new Date(dueAt);
+  if (Number.isNaN(instant.getTime())) return null;
 
-  let year = raw.getFullYear();
-  let month = raw.getMonth();
-  let day = raw.getDate();
+  // Extract the year/month/day in Pacific Time.
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  });
 
-  const hour = raw.getHours();
-  if (hour >= 0 && hour < 4) {
-    const adjusted = new Date(raw);
-    adjusted.setDate(adjusted.getDate() - 1);
-    year = adjusted.getFullYear();
-    month = adjusted.getMonth();
-    day = adjusted.getDate();
+  const parts = dtf.formatToParts(instant);
+  const year = Number(parts.find((p) => p.type === 'year')?.value ?? NaN);
+  const month = Number(parts.find((p) => p.type === 'month')?.value ?? NaN) - 1; // 0-based
+  const day = Number(parts.find((p) => p.type === 'day')?.value ?? NaN);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
   }
 
-  // Return a date set to local midnight of the logical due date so downstream
-  // code and the UI can treat it purely as a date without time-of-day shifts.
-  return new Date(year, month, day);
+  // Store as midday UTC on that Pacific calendar date. Midday avoids crossing
+  // date boundaries when viewed from other timezones.
+  return new Date(Date.UTC(year, month, day, 12, 0, 0));
 }
 
 export async function fetchAndStoreUpcomingAssignments(
