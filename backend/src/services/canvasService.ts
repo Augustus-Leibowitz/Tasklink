@@ -86,6 +86,40 @@ function normalizeDueDate(dueAt: string | null | undefined): Date | null {
   return new Date(Date.UTC(year, month, day, 12, 0, 0));
 }
 
+// Helper to fetch all pages from a Canvas collection endpoint using simple
+// page-based pagination. Canvas uses 1-based `page` with `per_page`.
+async function fetchAllPages<T>(
+  url: string,
+  params: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<T[]> {
+  const all: T[] = [];
+  const perPage = 50;
+  let page = 1;
+
+  // Stop once we receive a page with fewer than `perPage` results.
+  // This avoids relying on Link headers and keeps the logic simple.
+  // If Canvas ever returns an empty page, we also stop.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const res = await axios.get<T[]>(url, {
+      headers,
+      params: { ...params, per_page: perPage, page },
+    });
+    const data = res.data ?? [];
+    if (data.length === 0) {
+      break;
+    }
+    all.push(...data);
+    if (data.length < perPage) {
+      break;
+    }
+    page += 1;
+  }
+
+  return all;
+}
+
 export async function fetchAndStoreUpcomingAssignments(
   userId: string,
   options: FetchAssignmentsOptions = {},
@@ -119,37 +153,26 @@ export async function fetchAndStoreUpcomingAssignments(
     Authorization: `Bearer ${accessToken}`,
   };
 
-  // Fetch active courses first (the common case).
-  const activeCoursesResponse = await axios.get<CanvasCourse[]>(
+  // Fetch all active courses (not just the first page).
+  const activeCourses = await fetchAllPages<CanvasCourse>(
     `${baseUrl}/api/v1/courses`,
-    {
-      headers: authHeaders,
-      params: {
-        enrollment_state: 'active',
-        per_page: 50,
-      },
-    },
+    { enrollment_state: 'active' },
+    authHeaders,
   );
 
-  let courses: CanvasCourse[] = activeCoursesResponse.data ?? [];
+  let courses: CanvasCourse[] = activeCourses;
 
   // Best-effort: try to also include invited/pending courses so newly added ones
   // show up even before the term fully starts. If Canvas does not support this
   // on a given instance, ignore the error instead of failing the whole run.
   try {
-    const pendingResponse = await axios.get<CanvasCourse[]>(
+    const pendingCourses = await fetchAllPages<CanvasCourse>(
       `${baseUrl}/api/v1/courses`,
-      {
-        headers: authHeaders,
-        params: {
-          enrollment_state: 'invited_or_pending',
-          per_page: 50,
-        },
-      },
+      { enrollment_state: 'invited_or_pending' },
+      authHeaders,
     );
-    const pending = pendingResponse.data ?? [];
     const seen = new Set(courses.map((c) => c.id));
-    for (const c of pending) {
+    for (const c of pendingCourses) {
       if (!seen.has(c.id)) {
         courses.push(c);
         seen.add(c.id);
@@ -193,18 +216,15 @@ export async function fetchAndStoreUpcomingAssignments(
     coursesProcessed += 1;
 
     try {
-      const assignmentsResponse = await axios.get<CanvasAssignment[]>(
+      // Fetch all assignments for the course across all pages so that we don't
+      // silently drop anything beyond the first 50.
+      const assignments = await fetchAllPages<CanvasAssignment>(
         `${baseUrl}/api/v1/courses/${course.id}/assignments`,
         {
-          headers: authHeaders,
-          params: {
-            // No bucket filter: fetch all assignments for the course.
-            per_page: 50,
-          },
+          // No bucket filter: fetch all assignments for the course.
         },
+        authHeaders,
       );
-
-      const assignments = assignmentsResponse.data;
 
       for (const assignment of assignments) {
       if (!assignment.id || !assignment.name) continue;
