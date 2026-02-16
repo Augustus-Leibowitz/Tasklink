@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { prisma } from '../prisma';
 
-const TODOIST_API_BASE = 'https://api.todoist.com/rest/v2';
+const TODOIST_API_BASE = 'https://api.todoist.com/rest/v1';
 
 export interface UpsertTodoistConfigParams {
   userId: string;
