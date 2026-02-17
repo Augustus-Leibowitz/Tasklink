@@ -650,7 +650,14 @@ export const App: React.FC = () => {
           'Content-Type': 'application/json',
         },
         credentials: 'include',
-        body: JSON.stringify({ courseIds: syncSelectedCourseIds, prioritySettings }),
+        body: JSON.stringify({
+          courseIds: syncSelectedCourseIds,
+          prioritySettings,
+          detectionSettings: {
+            daysAhead: detectionSettings.daysAhead,
+            includeNoDueDate: detectionSettings.includeNoDueDate,
+          },
+        }),
       });
 
       if (!res.ok) {

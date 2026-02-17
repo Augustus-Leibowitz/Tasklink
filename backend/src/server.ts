@@ -382,16 +382,17 @@ app.get('/api/todoist/projects', requireAuth, async (req, res) => {
 app.post('/api/todoist/sync-assignments', requireAuth, async (req, res) => {
   try {
     const userId = getUserIdFromRequest(req);
-    const { courseIds, prioritySettings } = req.body as {
+    const { courseIds, prioritySettings, detectionSettings } = req.body as {
       courseIds?: string[];
       prioritySettings?: import('./services/todoistService').PrioritySettingsInput;
+      detectionSettings?: import('./services/todoistService').SyncWindowOptions;
     };
 
     if (!courseIds || !Array.isArray(courseIds) || courseIds.length === 0) {
       return res.status(400).json({ error: 'courseIds must be a non-empty array' });
     }
 
-    const result = await syncAssignmentsToTodoist(userId, courseIds, prioritySettings);
+    const result = await syncAssignmentsToTodoist(userId, courseIds, prioritySettings, detectionSettings ?? {});
     return res.json({
       message: 'Synced assignments to Todoist',
       ...result,

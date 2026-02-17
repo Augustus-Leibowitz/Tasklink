@@ -191,10 +191,20 @@ function bucketToTodoistPriority(bucket: PriorityKey, settings: NormalizedPriori
   return 2;
 }
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+export interface SyncWindowOptions {
+  // How many days ahead from today to include. If null/undefined, include all future dates.
+  daysAhead?: number | null;
+  // Whether to include assignments that have no due date at all.
+  includeNoDueDate?: boolean;
+}
+
 export async function syncAssignmentsToTodoist(
   userId: string,
   courseIds: string[],
   prioritySettings?: PrioritySettingsInput,
+  windowOptions: SyncWindowOptions = {},
 ): Promise<{
   created: number;
   updated: number;
@@ -271,6 +281,17 @@ export async function syncAssignmentsToTodoist(
       include: { course: true },
     });
 
+    // Compute the sync window relative to "today". We always treat today as the
+    // lower bound (no past-due assignments), and optionally cap how far ahead
+    // we look based on the caller's preferred look-ahead window.
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const includeNoDueDate = windowOptions.includeNoDueDate ?? true;
+    const maxDaysAhead =
+      typeof windowOptions.daysAhead === 'number' && windowOptions.daysAhead > 0
+        ? windowOptions.daysAhead
+        : null;
+
     // Build a cache of existing Todoist tasks per project so we can avoid
     // creating duplicates on resync and can update due dates for matching tasks.
     // We key by project + content (title) and ignore existing due dates, since
@@ -329,18 +350,39 @@ export async function syncAssignmentsToTodoist(
         continue;
       }
 
-      const today = new Date();
-      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const dueDateValue = assignment.dueDate ?? null;
-      const conceptualBucket: PriorityKey = (() => {
-        if (!dueDateValue) return 'p4';
+
+      // Respect includeNoDueDate on the sync window (mirrors Canvas fetch behavior).
+      if (!dueDateValue && !includeNoDueDate) {
+        skipped += 1;
+        continue;
+      }
+
+      let diffDays: number | null = null;
+      if (dueDateValue) {
         const dueMidnight = new Date(
           dueDateValue.getFullYear(),
           dueDateValue.getMonth(),
           dueDateValue.getDate(),
         );
         const diffMs = dueMidnight.getTime() - todayMidnight.getTime();
-        const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+        diffDays = Math.round(diffMs / MS_PER_DAY);
+
+        // Skip clearly past-due assignments; we only care about today and future.
+        if (diffDays < 0) {
+          skipped += 1;
+          continue;
+        }
+
+        // If a look-ahead window is configured, skip assignments beyond that window.
+        if (maxDaysAhead !== null && diffDays > maxDaysAhead) {
+          skipped += 1;
+          continue;
+        }
+      }
+
+      const conceptualBucket: PriorityKey = (() => {
+        if (!dueDateValue || diffDays === null) return 'p4';
         return computeConceptualBucket(diffDays, normalizedSettings);
       })();
 
