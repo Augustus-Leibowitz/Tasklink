@@ -391,7 +391,7 @@ export async function syncAssignmentsToTodoist(
               due_date: dueDate ?? null,
             };
 
-            await axios.put(
+            await axios.post(
               `${TODOIST_API_BASE}/tasks/${existingTaskId}`,
               updateBody,
               {
@@ -471,7 +471,7 @@ export async function syncAssignmentsToTodoist(
           due_date: dueDate ?? null,
         };
 
-        await axios.put(
+        await axios.post(
           `${TODOIST_API_BASE}/tasks/${assignment.todoistTaskId}`,
           updateBody,
           {
