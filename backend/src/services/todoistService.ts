@@ -411,8 +411,14 @@ export async function syncAssignmentsToTodoist(
             });
             updated += 1;
           } catch (err) {
-            // If updating the existing task fails (e.g., it was deleted), fall
-            // back to creating a new one below.
+            const status = (err as any)?.response?.status;
+            // If the task was deleted in Todoist (404), fall back to creating a
+            // new one below. For other errors (401, 403, 500, ...), surface the
+            // problem instead of silently skipping everything.
+            if (status !== 404) {
+              await markError(err);
+              throw err;
+            }
           }
 
           continue;
@@ -450,7 +456,8 @@ export async function syncAssignmentsToTodoist(
 
           created += 1;
         } catch (err) {
-          skipped += 1;
+          await markError(err);
+          throw err;
         }
 
         continue;
@@ -483,16 +490,22 @@ export async function syncAssignmentsToTodoist(
         });
         updated += 1;
       } catch (err) {
-        // If the task no longer exists in Todoist (e.g., deleted manually), clear the
-        // todoistTaskId so that a future sync can recreate it.
-        await prisma.assignment.update({
-          where: { id: assignment.id },
-          data: {
-            todoistTaskId: null,
-            lastSyncedAt: new Date(),
-          },
-        });
-        skipped += 1;
+        const status = (err as any)?.response?.status;
+        if (status === 404) {
+          // If the task no longer exists in Todoist (e.g., deleted manually), clear the
+          // todoistTaskId so that a future sync can recreate it.
+          await prisma.assignment.update({
+            where: { id: assignment.id },
+            data: {
+              todoistTaskId: null,
+              lastSyncedAt: new Date(),
+            },
+          });
+          skipped += 1;
+        } else {
+          await markError(err);
+          throw err;
+        }
       }
     }
 
