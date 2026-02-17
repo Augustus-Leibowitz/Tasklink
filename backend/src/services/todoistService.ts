@@ -286,11 +286,10 @@ export async function syncAssignmentsToTodoist(
     // we look based on the caller's preferred look-ahead window.
     const now = new Date();
     const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const includeNoDueDate = windowOptions.includeNoDueDate ?? true;
-    const maxDaysAhead =
-      typeof windowOptions.daysAhead === 'number' && windowOptions.daysAhead > 0
-        ? windowOptions.daysAhead
-        : null;
+
+    // For now, rely on the Canvas fetch step to enforce the user's detection
+    // window. During sync we only treat clearly past-due assignments
+    // specially; everything else in the database is eligible to sync.
 
     // Build a cache of existing Todoist tasks per project so we can avoid
     // creating duplicates on resync and can update due dates for matching tasks.
@@ -352,12 +351,6 @@ export async function syncAssignmentsToTodoist(
 
       const dueDateValue = assignment.dueDate ?? null;
 
-      // Respect includeNoDueDate on the sync window (mirrors Canvas fetch behavior).
-      if (!dueDateValue && !includeNoDueDate) {
-        skipped += 1;
-        continue;
-      }
-
       let diffDays: number | null = null;
       if (dueDateValue) {
         const dueMidnight = new Date(
@@ -370,12 +363,6 @@ export async function syncAssignmentsToTodoist(
 
         // Skip clearly past-due assignments; we only care about today and future.
         if (diffDays < 0) {
-          skipped += 1;
-          continue;
-        }
-
-        // If a look-ahead window is configured, skip assignments beyond that window.
-        if (maxDaysAhead !== null && diffDays > maxDaysAhead) {
           skipped += 1;
           continue;
         }
