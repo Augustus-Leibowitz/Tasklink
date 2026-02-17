@@ -571,8 +571,11 @@ export const App: React.FC = () => {
         throw new Error(body.error || 'Request failed with status ' + res.status);
       }
 
-      const body = (await res.json()) as { projects?: TodoistProject[] };
-      const projects = body.projects ?? [];
+      const body = (await res.json()) as { projects?: unknown };
+      const projects = Array.isArray(body.projects) ? (body.projects as TodoistProject[]) : [];
+      if (!Array.isArray(projects)) {
+        throw new Error('Unexpected projects response from server');
+      }
       setTodoistProjects(projects);
       if (projects.length > 0) {
         setTodoistResult(`Loaded ${projects.length} project${projects.length === 1 ? '' : 's'}.`);

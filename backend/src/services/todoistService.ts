@@ -66,13 +66,27 @@ export async function fetchTodoistProjects(userId: string): Promise<TodoistProje
 
   const { accessToken } = user.todoistAccount;
 
-  const res = await axios.get<TodoistProject[]>(`${TODOIST_API_BASE}/projects`, {
+  // Todoist API v1 returns paginated results in a { results: [...] } envelope.
+  // However, older REST APIs returned a bare array. Support both shapes here.
+  const res = await axios.get<{ results?: TodoistProject[] } | TodoistProject[]>(`${TODOIST_API_BASE}/projects`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   });
 
-  return res.data;
+  const data = res.data as any;
+  let projects: TodoistProject[];
+
+  if (Array.isArray(data)) {
+    projects = data;
+  } else if (Array.isArray(data.results)) {
+    projects = data.results;
+  } else {
+    throw new Error('Unexpected Todoist projects response shape');
+  }
+
+  // Only expose the fields Tasklink actually uses.
+  return projects.map((p) => ({ id: String(p.id), name: p.name }));
 }
 
 function toTodoistDate(date: Date | null): string | undefined {
@@ -276,7 +290,9 @@ export async function syncAssignmentsToTodoist(
 
     for (const projectId of projectIds) {
       try {
-        const res = await axios.get<TodoistTask[]>(`${TODOIST_API_BASE}/tasks`, {
+        // Todoist API v1 returns paginated task results in a { results: [...] } envelope.
+        // We only need the first page for each project, which is limited to 50 tasks by default.
+        const res = await axios.get<{ results?: TodoistTask[] } | TodoistTask[]>(`${TODOIST_API_BASE}/tasks`, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -285,7 +301,10 @@ export async function syncAssignmentsToTodoist(
           },
         });
 
-        for (const task of res.data ?? []) {
+        const data = res.data as any;
+        const tasks: TodoistTask[] = Array.isArray(data) ? data : data.results ?? [];
+
+        for (const task of tasks ?? []) {
           const key = makeTaskKey(projectId, task.content);
           if (!existingTasksByKey.has(key)) {
             existingTasksByKey.set(key, task.id);
@@ -343,7 +362,7 @@ export async function syncAssignmentsToTodoist(
               due: dueDate ? { date: dueDate } : null,
             };
 
-            await axios.post(
+            await axios.put(
               `${TODOIST_API_BASE}/tasks/${existingTaskId}`,
               updateBody,
               {
@@ -377,7 +396,7 @@ export async function syncAssignmentsToTodoist(
         };
 
         if (dueDate) {
-          body.due_date = dueDate;
+          body.due = { date: dueDate };
         }
 
         try {
@@ -416,7 +435,7 @@ export async function syncAssignmentsToTodoist(
           due: dueDate ? { date: dueDate } : null,
         };
 
-        await axios.post(
+        await axios.put(
           `${TODOIST_API_BASE}/tasks/${assignment.todoistTaskId}`,
           updateBody,
           {
